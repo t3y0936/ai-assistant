@@ -19,19 +19,35 @@ def get_client():
 
 client = get_client()
 
-# ===== 2. 历史放在 session_state 里 =====
-SYSTEM_PROMPT = "你是一个简洁、直接的中文助手，回答不超过三句话。"
 
+# ===== 2.人设配置 =====
+if "nickname" not in st.session_state:
+    st.session_state.nickname = "小助手"
+if "persona" not in st.session_state:
+    st.session_state.persona = "你是一个简洁、直接的中文助手，回答不超过三句话。"
+
+def build_system_prompt():
+    nick = (st.session_state.nickname or "").strip() or "助手"
+    persona = (st.session_state.persona or "").strip() or "你是一个有帮助的助手。"
+    return f"你的名字是{nick}。{persona}"
+
+# ===== 2. 历史放在 session_state 里 =====
 if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    st.session_state.messages = [{"role": "system", "content": build_system_prompt()}]
 
 # ===== 3. 侧边栏 =====
 with st.sidebar:
     st.title("对话")
     if st.button("+ 新建对话", use_container_width=True):
-        st.session_state.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        st.session_state.messages = [{"role": "system", "content": build_system_prompt()}]
         st.rerun()
+
     st.divider()
+
+    st.subheader("人设配置")
+    st.text_input("昵称", key="nickname")
+    st.text_area("性格", key="persona", height=110)
+
     st.caption(f"当前 {len(st.session_state.messages) - 1} 条消息")
 
 # ===== 4. 主区：把历史画出来 =====
@@ -45,7 +61,9 @@ for msg in st.session_state.messages[1:]:   # 跳过 system
 user_input = st.chat_input("问点什么…")
 
 if user_input:
-    # 先存你的话，再画出来
+    # 用当前设置刷新 system，而不是用历史里那个旧的
+    st.session_state.messages[0] = {"role": "system", "content": build_system_prompt()}
+    # 先存用户的话，再画出来
     st.session_state.messages.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
         st.write(user_input)
@@ -55,15 +73,29 @@ if user_input:
         usage_note = None
         with st.spinner("思考中…"):
             try:
-                resp = client.chat.completions.create(
+                stream = client.chat.completions.create(  # ← 改动①
                     model="deepseek-chat",
                     messages=st.session_state.messages,
+                    stream=True,
+                    stream_options={"include_usage": True},
                 )
-                reply = resp.choices[0].message.content
-                usage_note = f"输入 {resp.usage.prompt_tokens} tokens / 输出 {resp.usage.completion_tokens} tokens"
+                placeholder = st.empty()
+                full = ""
+                u = None
+                for chunk in stream:
+                    if chunk.choices and chunk.choices[0].delta.content:
+                        full += chunk.choices[0].delta.content
+                        placeholder.markdown(full + "▌")
+                    if getattr(chunk, "usage", None):
+                        u = chunk.usage
+
+                placeholder.markdown(full)
+                reply = full
+                if u:
+                    usage_note = f"输入 {u.prompt_tokens} tokens / 输出 {u.completion_tokens} tokens"
+
             except Exception as e:
                 s = str(e)
-                # ↓ 这四个分支全部缩进到 except 里面
                 if "401" in s or "Unauthorized" in s:
                     reply = "API Key 无效，检查一下环境变量"
                 elif "402" in s or "Insufficient" in s:
@@ -72,8 +104,8 @@ if user_input:
                     reply = "网络连不上，检查一下能不能访问 api.deepseek.com"
                 else:
                     reply = f"出错了：{s}"
+                st.write(reply)
 
-        st.write(reply)
         if usage_note:
             st.caption(usage_note)
 
