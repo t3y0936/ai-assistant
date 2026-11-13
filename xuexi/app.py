@@ -1,8 +1,14 @@
 import os
 import streamlit as st
 from openai import OpenAI
+from pathlib import Path
+import json
+from pathlib import Path
+from datetime import datetime
 
 st.set_page_config(page_title="AI 助手", page_icon="🤖", layout="wide")
+
+DATA_FILE = Path("data/chats.json")
 
 # ===== 0. 检查 key =====
 if not os.environ.get("DEEPSEEK_API_KEY"):
@@ -31,16 +37,88 @@ def build_system_prompt():
     persona = (st.session_state.persona or "").strip() or "你是一个有帮助的助手。"
     return f"你的名字是{nick}。{persona}"
 
-# ===== 2. 历史放在 session_state 里 =====
-if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "system", "content": build_system_prompt()}]
+# ===== 3. 历史放在 session_state 里 =====
+def new_conversation():
+    now = datetime.now()
+    return {
+        "id": now.strftime("%Y%m%d_%H%M%S%f"),
+        "title": "新对话",
+        "created_at": now.strftime("%Y-%m-%d %H:%M"),
+        "messages": [{"role": "system", "content": build_system_prompt()}],
+    }
 
-# ===== 3. 侧边栏 =====
+
+def load_conversations():
+    if DATA_FILE.exists():
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        # 只保留有内容的对话，顺手清掉历史遗留的空对话
+        useful = [c for c in data if len(c.get("messages", [])) > 1]
+        if data:
+            return data
+    return [new_conversation()]
+
+
+def save_conversations():
+    DATA_FILE.parent.mkdir(exist_ok=True)
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(st.session_state.conversations, f, ensure_ascii=False, indent=2)
+
+
+def current_conv():
+    for c in st.session_state.conversations:
+        if c["id"] == st.session_state.current_id:
+            return c
+    st.session_state.current_id = st.session_state.conversations[0]["id"]
+    return st.session_state.conversations[0]
+
+def is_empty(conv):
+    """只有 system 一条，说明用户还没说过话"""
+    return len(conv["messages"]) <= 1
+
+# ===== 4. 初始化 =====
+if "conversations" not in st.session_state:
+    st.session_state.conversations = load_conversations()
+    st.session_state.current_id = st.session_state.conversations[0]["id"]
+
+# ===== 5. 侧边栏 =====
 with st.sidebar:
     st.title("对话")
+
     if st.button("+ 新建对话", use_container_width=True):
-        st.session_state.messages = [{"role": "system", "content": build_system_prompt()}]
-        st.rerun()
+        if is_empty(current_conv()):
+            st.toast("当前已经是新对话了，先聊点什么吧")
+        else:
+            conv = new_conversation()
+            st.session_state.conversations.insert(0, conv)
+            st.session_state.current_id = conv["id"]
+            save_conversations()
+            st.rerun()
+
+    for item in st.session_state.conversations:
+        is_current = item["id"] == st.session_state.current_id
+        col_text, col_del = st.columns([5, 1], vertical_alignment="center")
+
+        with col_text:
+            label = ("● " if is_current else "") + item["title"]
+            if st.button(label, key=f"conv_{item['id']}", use_container_width=True):
+                st.session_state.current_id = item["id"]
+                st.rerun()
+
+        with col_del:
+            if st.button("✕", key=f"del_{item['id']}", use_container_width=True):
+                st.session_state.conversations = [
+                    c for c in st.session_state.conversations if c["id"] != item["id"]
+                ]
+                # 删光了就补一条新的
+                if not st.session_state.conversations:
+                    st.session_state.conversations = [new_conversation()]
+                # 删的正好是当前这条，就切到第一条
+                if st.session_state.current_id == item["id"]:
+                    st.session_state.current_id = st.session_state.conversations[0]["id"]
+                save_conversations()
+                st.toast("已删除")
+                st.rerun()
 
     st.divider()
 
@@ -48,23 +126,28 @@ with st.sidebar:
     st.text_input("昵称", key="nickname")
     st.text_area("性格", key="persona", height=110)
 
-    st.caption(f"当前 {len(st.session_state.messages) - 1} 条消息")
+    st.caption(f"共 {len(st.session_state.conversations)} 个对话")
 
-# ===== 4. 主区：把历史画出来 =====
-st.title("AI 助手")
+# ===== 6. 主区：把历史画出来 =====
+conv = current_conv()
+messages = conv["messages"]
 
-for msg in st.session_state.messages[1:]:   # 跳过 system
+st.title(conv["title"])
+
+for msg in messages[1:]:   # 跳过 system
     with st.chat_message(msg["role"]):
         st.write(msg["content"])
 
-# ===== 5. 输入框 + 调 API =====
+# ===== 7. 输入框 + 调 API =====
 user_input = st.chat_input("问点什么…")
 
 if user_input:
-    # 用当前设置刷新 system，而不是用历史里那个旧的
-    st.session_state.messages[0] = {"role": "system", "content": build_system_prompt()}
-    # 先存用户的话，再画出来
-    st.session_state.messages.append({"role": "user", "content": user_input})
+
+    messages[0] = {"role": "system", "content": build_system_prompt()}
+    messages.append({"role": "user", "content": user_input})
+
+    save_conversations()
+
     with st.chat_message("user"):
         st.write(user_input)
 
@@ -73,9 +156,9 @@ if user_input:
         usage_note = None
         with st.spinner("思考中…"):
             try:
-                stream = client.chat.completions.create(  # ← 改动①
+                stream = client.chat.completions.create(
                     model="deepseek-chat",
-                    messages=st.session_state.messages,
+                    messages=messages,
                     stream=True,
                     stream_options={"include_usage": True},
                 )
@@ -97,7 +180,7 @@ if user_input:
             except Exception as e:
                 s = str(e)
                 if "401" in s or "Unauthorized" in s:
-                    reply = "API Key 无效，检查一下环境变量"
+                    reply = "API Key 无效，检查一下环境A变量"
                 elif "402" in s or "Insufficient" in s:
                     reply = "余额不足，去 platform.deepseek.com 充值"
                 elif "timeout" in s.lower() or "Connection" in s:
@@ -109,4 +192,5 @@ if user_input:
         if usage_note:
             st.caption(usage_note)
 
-    st.session_state.messages.append({"role": "assistant", "content": reply})
+    messages.append({"role": "assistant", "content": reply})
+    save_conversations()

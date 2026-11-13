@@ -1,0 +1,14 @@
+{
+  "id": "chat_001",
+  "title": "第一次对话",
+  "messages": [
+    {
+      "role": "user",
+      "content": "你好"
+    },
+    {
+      "role": "assistant",
+      "content": "你好！有什么可以帮你的？"
+    }
+  ]
+}
