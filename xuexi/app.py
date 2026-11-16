@@ -10,6 +10,10 @@ st.set_page_config(page_title="AI 助手", page_icon="🤖", layout="wide")
 
 DATA_FILE = Path("data/chats.json")
 
+#默认人设（新建对话时用它初始化）
+DEFAULT_NICK = "小助手"
+DEFAULT_PERSONA = "你是一个简洁、直接的中文助手，回答不超过三句话。"
+
 # ===== 0. 检查 key =====
 if not os.environ.get("DEEPSEEK_API_KEY"):
     st.error("没找到 DEEPSEEK_API_KEY，先在 PowerShell 里设置环境变量，再重启 streamlit")
@@ -28,13 +32,13 @@ client = get_client()
 
 # ===== 2.人设配置 =====
 if "nickname" not in st.session_state:
-    st.session_state.nickname = "小助手"
+    st.session_state.nickname =  DEFAULT_NICK
 if "persona" not in st.session_state:
-    st.session_state.persona = "你是一个简洁、直接的中文助手，回答不超过三句话。"
+    st.session_state.persona = DEFAULT_PERSONA
 
-def build_system_prompt():
-    nick = (st.session_state.nickname or "").strip() or "助手"
-    persona = (st.session_state.persona or "").strip() or "你是一个有帮助的助手。"
+def build_system_prompt(nick, persona):
+    nick = (nick or "").strip() or "助手"
+    persona = (persona or "").strip() or "你是一个有帮助的助手。"
     return f"你的名字是{nick}。{persona}"
 
 # ===== 3. 历史放在 session_state 里 =====
@@ -44,7 +48,9 @@ def new_conversation():
         "id": now.strftime("%Y%m%d_%H%M%S%f"),
         "title": "新对话",
         "created_at": now.strftime("%Y-%m-%d %H:%M"),
-        "messages": [{"role": "system", "content": build_system_prompt()}],
+        "nickname": DEFAULT_NICK,
+        "persona": DEFAULT_PERSONA,
+        "messages": [{"role": "system", "content": build_system_prompt(DEFAULT_NICK, DEFAULT_PERSONA)}],
     }
 
 
@@ -54,8 +60,11 @@ def load_conversations():
             data = json.load(f)
         # 只保留有内容的对话，顺手清掉历史遗留的空对话
         useful = [c for c in data if len(c.get("messages", [])) > 1]
-        if data:
-            return data
+        for c in useful:
+            c.setdefault("nickname", DEFAULT_NICK)
+            c.setdefault("persona", DEFAULT_PERSONA)
+        if useful:
+            return useful
     return [new_conversation()]
 
 
@@ -81,6 +90,13 @@ if "conversations" not in st.session_state:
     st.session_state.conversations = load_conversations()
     st.session_state.current_id = st.session_state.conversations[0]["id"]
 
+conv = current_conv()
+
+if st.session_state.get("_synced_conv_id") != conv["id"]:
+    st.session_state.nickname = conv.get("nickname", DEFAULT_NICK)
+    st.session_state.persona = conv.get("persona", DEFAULT_PERSONA)
+    st.session_state._synced_conv_id = conv["id"]
+
 # ===== 5. 侧边栏 =====
 with st.sidebar:
     st.title("对话")
@@ -97,16 +113,16 @@ with st.sidebar:
 
     for item in st.session_state.conversations:
         is_current = item["id"] == st.session_state.current_id
-        col_text, col_del = st.columns([5, 1], vertical_alignment="center")
+        col_text, col_del = st.columns([4, 1], vertical_alignment="center")
 
         with col_text:
-            label = ("● " if is_current else "") + item["title"]
+            label = ("➡️" if is_current else "") + item["title"]
             if st.button(label, key=f"conv_{item['id']}", use_container_width=True):
                 st.session_state.current_id = item["id"]
                 st.rerun()
 
         with col_del:
-            if st.button("✕", key=f"del_{item['id']}", use_container_width=True):
+            if st.button("❌", key=f"del_{item['id']}"):
                 st.session_state.conversations = [
                     c for c in st.session_state.conversations if c["id"] != item["id"]
                 ]
@@ -126,6 +142,13 @@ with st.sidebar:
     st.text_input("昵称", key="nickname")
     st.text_area("性格", key="persona", height=110)
 
+    # 控件被改动->写回当前这条对话
+    if (conv["nickname"] != st.session_state.nickname
+            or conv["persona"] != st.session_state.persona):
+        conv["nickname"] = st.session_state.nickname
+        conv["persona"] = st.session_state.persona
+        save_conversations()
+
     st.caption(f"共 {len(st.session_state.conversations)} 个对话")
 
 # ===== 6. 主区：把历史画出来 =====
@@ -143,7 +166,7 @@ user_input = st.chat_input("问点什么…")
 
 if user_input:
 
-    messages[0] = {"role": "system", "content": build_system_prompt()}
+    messages[0] = {"role": "system", "content": build_system_prompt(conv["nickname"], conv["persona"])}
     messages.append({"role": "user", "content": user_input})
 
     save_conversations()
