@@ -15,15 +15,25 @@ DEFAULT_NICK = "小助手"
 DEFAULT_PERSONA = "你是一个简洁、直接的中文助手，回答不超过三句话。"
 
 # ===== 0. 检查 key =====
-if not os.environ.get("DEEPSEEK_API_KEY"):
-    st.error("没找到 DEEPSEEK_API_KEY，先在 PowerShell 里设置环境变量，再重启 streamlit")
-    st.stop()
+def get_api_key():
+    key = os.environ.get("DEEPSEEK_API_KEY")
+    if not key:
+        try:
+            key = st.secrets.get("DEEPSEEK_API_KEY")
+        except Exception:
+            key = None
+    return key
 
+API_KEY = get_api_key()
+
+if not API_KEY:
+    st.error("没找到 DEEPSEEK_API_KEY：本地设环境变量，云端配 Secrets")
+    st.stop()
 # ===== 1. 客户端只建一次 =====
 @st.cache_resource
 def get_client():
     return OpenAI(
-        api_key=os.environ["DEEPSEEK_API_KEY"],
+        api_key=API_KEY,
         base_url="https://api.deepseek.com",
     )
 
