@@ -83,3 +83,11 @@ D:\learn\
 - [ ] 对话搜索
 - [ ] 导出为 Markdown
 - [ ] 部署到公网
+
+## 在线体验
+
+https://ai-assistant-t3y0936.streamlit.app
+
+> 免费额度会休眠，首次打开可能需要等 30 秒。
+
+## 功能
