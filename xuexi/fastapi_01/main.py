@@ -1,8 +1,21 @@
 from fastapi import FastAPI, Path,Query
-
+from pydantic import BaseModel,Field
+from datetime import datetime
 app = FastAPI(title="第一个 FastAPI 应用")
 
+class ConversationCreate(BaseModel):
+    title: str = Field(default="新对话", max_length=50, description="对话标题")
+    persona: str = Field(default="", max_length=200, description="人设描述")
 
+@app.post("/conversations", summary="新建一个对话")
+def create_conversation(data: ConversationCreate):
+    return {
+        "id": datetime.now().strftime("%Y%m%d_%H%M%S%f"),
+        "title": data.title,
+        "persona": data.persona,
+        "messages": [],
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+    }
 @app.get("/")
 def read_root():
     return {"message": "hello"}
@@ -44,4 +57,17 @@ async def query_book(
     ),
 ):
     return {"category": category, "price": price}
+
+class Book(BaseModel):
+    name:str = Field(min_length=2, max_length=20)
+    author:str = Field(min_length=2, max_length=10)
+    publisher:str = Field(default="咕咕嘎嘎出版社")
+    price:float = Field(gt=0, description="价格")
+
+@app.post("/book")
+async def create_book(book: Book):
+    return {"id": book.id,
+            "author": book.author,
+            "publisher": book.publisher,
+            "price": book.price}
 
