@@ -1,11 +1,51 @@
-from fastapi import FastAPI, Path,Query
+from fastapi import FastAPI, Path,Query,Request,Depends,Header,HTTPException
+import time
 from pydantic import BaseModel,Field
 from datetime import datetime
 app = FastAPI(title="第一个 FastAPI 应用")
 
+
 class ConversationCreate(BaseModel):
     title: str = Field(default="新对话", max_length=50, description="对话标题")
     persona: str = Field(default="", max_length=200, description="人设描述")
+
+def get_current_user(x_token: str | None = Header(default=None)):
+    if x_token != "secret-123":
+        raise HTTPException(status_code=401, detail="未登录")
+    return {"user_id": 1, "name": "t3y0936"}
+
+conversations = {}      # 模块级
+
+@app.post("/conversations")
+def create_conversation(data: ConversationCreate):
+    conv_id = datetime.now().strftime("%Y%m%d_%H%M%S%f")
+    conversations[conv_id] = {
+        "id": conv_id,
+        "title": data.title,
+        "persona": data.persona,
+        "messages": [],
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+    }
+    return conversations[conv_id]
+
+
+@app.get("/conversations/{conv_id}")
+def get_conversation(conv_id: str):
+    if conv_id not in conversations:
+        raise HTTPException(status_code=404, detail=f"对话 {conv_id} 不存在")
+    return conversations[conv_id]
+
+@app.get("/me")
+def read_me(user: dict = Depends(get_current_user)):
+    return user
+
+@app.middleware("http")
+async def add_process_time(request: Request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    cost = (time.perf_counter() - start) * 1000
+    response.headers["X-Process-Time"] = f"{cost:.1f}ms"
+    return response
 
 @app.post("/conversations", summary="新建一个对话")
 def create_conversation(data: ConversationCreate):
